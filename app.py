@@ -25,22 +25,26 @@ if uploaded_file:
         "Bank Settlement Value": ["Bank Settlement Value (Rs.)", "Settlement Amount", "Net Amount"],
         "Marketplace Fee": ["Marketplace Fee", "Commission", "MP Fee"],
         "Protection Fund": ["Protection Fund", "Protection", "Fund"],
-        "Refund": ["Refund", "Refund Amount", "Return Amount"]
+        "Refund": ["Refund", "Refund Amount", "Return Amount"],
+        "Commission Rate (%)": ["Commission Rate (%)", "Commission %", "Rate of Commission"],
+        "TCS (Rs.)": ["TCS (Rs.)", "TCS", "Tax Collected at Source"],
+        "TDS (Rs.)": ["TDS (Rs.)", "TDS", "Tax Deducted at Source"],
+        "GST on MP Fees (Rs.)": ["GST on MP Fees (Rs.)", "GST on Marketplace Fee", "GST on MP"]
     }
     
     try:
         # Read Excel with specified header and skip rows
-        temp_df = pd.read_excel(uploaded_file, sheet_name=None, header=None)
+        temp_df = pd.read_excel(uploaded_file, sheet_name="Orders", header=None)
         
         # Get first sheet
-        sheet_name = list(temp_df.keys())[0]
-        temp_data = temp_df[sheet_name]
+        #sheet_name = list(temp_df.keys())[0]
+        #temp_data = temp_df[sheet_name]
         
         # Extract column names from header row
-        column_names = temp_data.iloc[header_row].tolist()
+        column_names = temp_df.iloc[header_row].tolist()
         
         # Extract data starting from skip_rows
-        data_df = temp_data.iloc[skip_rows:].reset_index(drop=True)
+        data_df = temp_df.iloc[skip_rows:].reset_index(drop=True)
         data_df.columns = [str(name).strip() for name in column_names[:len(data_df.columns)]]
         
         # Match columns using fuzzy matching
@@ -68,10 +72,25 @@ if uploaded_file:
             # Display results
             st.success(f"Found {len(col_map)} matching columns")
             st.dataframe(processed_df)
+
+            # Create pivot table from processed data for later use
+            pivot_cols = ["Order ID", "Invoice", "Sale Amount", "Refund", "Protection Fund", 
+                        "Marketplace Fee", "GST on MP Fees (Rs.)", "TCS (Rs.)", "TDS (Rs.)"]
+            available_pivot_cols = [col for col in pivot_cols if col in processed_df.columns]
+
+            if available_pivot_cols:
+                main_pivot = processed_df[available_pivot_cols].copy()
+                # Store in session state for second uploader
+                st.session_state.main_pivot = main_pivot
+    
+                st.write("#### Pivot Table from Main Data")
+                st.dataframe(main_pivot)
             
             # Download option
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                # Convert all columns to string to avoid PyArrow issues
+                download_df = processed_df.astype(str)
                 processed_df.to_excel(writer, index=False, sheet_name="Processed_Data")
             
             st.download_button(
@@ -85,3 +104,76 @@ if uploaded_file:
             
     except Exception as e:
         st.error(f"Error: {str(e)}")
+
+# Second file uploader
+pivot_file = st.file_uploader("Upload Excel File for Pivot Table", type=["xlsx"], key="pivot_uploader")
+
+if pivot_file:
+    try:
+        # Read specific sheets: ZTRANS and CN with dtype=str to avoid type issues
+        excel_sheets = pd.read_excel(pivot_file, sheet_name=["ZTRANS", "CN"], dtype=str)
+        ztrans_df = excel_sheets["ZTRANS"]
+        cn_df = excel_sheets["CN"]
+        
+        # Clean column names - remove extra spaces
+        ztrans_df.columns = ztrans_df.columns.str.strip()
+        cn_df.columns = cn_df.columns.str.strip()
+        
+        st.write("#### ZTRANS Data Preview")
+        st.dataframe(ztrans_df.head())
+        
+        st.write("#### CN Data Preview") 
+        st.dataframe(cn_df.head())
+        
+        # Check if main pivot exists from first upload
+        if 'main_pivot' in st.session_state:
+            st.write("#### Processing Combined Data...")
+            # Combining logic will go here in next step
+            # Get main pivot data
+            main_pivot = st.session_state.main_pivot
+                        
+            # Group ZTRANS data by CUSTOMER REFERENCE
+            ztrans_grouped = ztrans_df.groupby('CUSTOMER REFERENCE').agg({
+                'Billing No': 'first',  # Take first billing number for each customer reference
+                'Total Amt': 'sum'      # Sum all amounts for each customer reference
+            }).reset_index()
+
+            # Merge main pivot with ZTRANS data on Order ID = CUSTOMER REFERENCE
+            combined_df = main_pivot.merge(ztrans_grouped, 
+                                        left_on='Order ID', 
+                                        right_on='CUSTOMER REFERENCE', 
+                                        how='left')
+
+            # Get Total Receivable from CN sheet using Billing No
+            cn_data = cn_df.groupby('Invoice Reference Number')['Total Receivable'].first().reset_index()
+
+            # Merge with CN data
+            final_df = combined_df.merge(cn_data,
+                                        left_on='Billing No',
+                                        right_on='Invoice Reference Number',
+                                        how='left')
+
+            # Rename and organize columns as required
+            final_df = final_df.rename(columns={
+                'Billing No': 'ZTRANS Invoice',
+                'Total Amt': 'ZTRANS Amount', 
+                'Total Receivable': 'ZGSTR1'
+            })
+
+            # Select and reorder final columns
+            final_columns = ['Order ID', 'Invoice', 'Sale Amount', 'Refund', 'Protection Fund',
+                            'Marketplace Fee', 'GST on MP Fees (Rs.)', 'TCS (Rs.)', 'TDS (Rs.)',
+                            'ZTRANS Invoice', 'ZTRANS Amount', 'ZGSTR1']
+
+            # Keep only available columns and fill missing with NA
+            available_final_cols = [col for col in final_columns if col in final_df.columns]
+            result_df = final_df[available_final_cols].fillna('NA')
+
+            st.write("#### Final Combined Result")
+            st.dataframe(result_df)
+            
+        else:
+            st.warning("Please upload and process the main Excel file first")
+            
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")        
