@@ -72,7 +72,7 @@ if uploaded_file:
                     processed_df[req_col] = "NA"
             
             # Display results
-            st.success(f"Found {len(col_map)} matching columns")
+            #st.success(f"Found {len(col_map)} matching columns")
             st.dataframe(processed_df)
 
             # Create pivot table from processed data for later use
@@ -85,8 +85,8 @@ if uploaded_file:
                 # Store in session state for second uploader
                 st.session_state.main_pivot = main_pivot
     
-                st.write("#### Pivot Table from Main Data")
-                st.dataframe(main_pivot)
+                #st.write("#### Pivot Table from Main Data")
+                #st.dataframe(main_pivot)
             
             # Download option
             output = io.BytesIO()
@@ -116,6 +116,7 @@ if pivot_file:
         # Read sheets with different header rows
         ztra_df = pd.read_excel(pivot_file, sheet_name="ZTRA", dtype=str, header=1)  # Row 1 for ZTRA
         zcn_df = pd.read_excel(pivot_file, sheet_name="ZCN", dtype=str, header=0)   # Row 0 for ZCN
+        claim_df = pd.read_excel(pivot_file, sheet_name="Claim", dtype=str, header=0)   # Row 0 for Claim 
 
         ztrans_df = ztra_df  # Keep the same variable name
         cn_df = zcn_df       # Keep the same variable name
@@ -134,17 +135,21 @@ if pivot_file:
         ztrans_df = ztrans_df.replace('nan', '').replace('', None).dropna(how='all')
         cn_df = cn_df.replace('nan', '').replace('', None).dropna(how='all')
         
-        st.write("#### ZTRA Data Preview")
-        st.write("**Available columns:**", list(ztrans_df.columns))
-        st.dataframe(ztrans_df.head().fillna(''))
+        #st.write("#### ZTRA Data Preview")
+        #st.write("**Available columns:**", list(ztrans_df.columns))
+        #st.dataframe(ztrans_df.head().fillna(''))
         
-        st.write("#### ZCN Data Preview") 
-        st.write("**Available columns:**", list(cn_df.columns))
-        st.dataframe(cn_df.head().fillna(''))
+        #st.write("#### ZCN Data Preview") 
+        #st.write("**Available columns:**", list(cn_df.columns))
+        #st.dataframe(cn_df.head().fillna(''))
+
+        #st.write("#### Claim Data Preview")
+        #st.write("**Available columns:**", list(claim_df.columns))
+        #st.dataframe(claim_df.head().fillna(''))
         
         # Check if main pivot exists from first upload
         if 'main_pivot' in st.session_state:
-            st.write("#### Processing Combined Data...")
+            #st.write("#### Processing Combined Data...")
             # Combining logic will go here in next step
             # Get main pivot data
             main_pivot = st.session_state.main_pivot
@@ -169,18 +174,44 @@ if pivot_file:
                                         left_on='Billing No',
                                         right_on='Invoice Reference Number',
                                         how='left')
+            
+            # Get data from Claim sheet with priority logic
+            def get_priority_claim_data(group):
+                # Check if any row is "Approved" 
+                approved_rows = group[group['STATUS-1'] == 'Approved']
+                
+                if not approved_rows.empty:
+                    # If approved rows exist, take first approved
+                    return approved_rows.iloc[0]
+                else:
+                    # If no approved rows, take first row (Not Approved)
+                    return group.iloc[0]
+
+            # Apply priority grouping
+            claim_data = claim_df.groupby('REFERENCE NO').apply(get_priority_claim_data).reset_index(drop=True)
+
+            # Select only needed columns
+            claim_final = claim_data[['REFERENCE NO', 'STATUS-1', 'Approved Amount']].copy()
+
+            # Merge with Claim data
+            final_df = final_df.merge(claim_final,
+                                    left_on='Invoice',
+                                    right_on='REFERENCE NO',
+                                    how='left')
 
             # Rename and organize columns as required
             final_df = final_df.rename(columns={
                 'Billing No': 'ZTRANS Invoice',
                 'Total Amt': 'ZTRANS Amount', 
-                'Total Receivable': 'ZGSTR1'
+                'Total Receivable': 'ZGSTR1',
+                'STATUS-1': 'Claim Status',
+                'Approved Amount': 'Claim Approved Amt.'
             })
 
             # Select and reorder final columns
             final_columns = ['Order ID', 'Invoice', 'Sale Amount', 'Refund', 'Protection Fund',
                             'Marketplace Fee', 'GST on MP Fees (Rs.)', 'TCS (Rs.)', 'TDS (Rs.)',
-                            'ZTRANS Invoice', 'ZTRANS Amount', 'ZGSTR1']
+                            'ZTRANS Invoice', 'ZTRANS Amount', 'ZGSTR1','Claim Status','Claim Approved Amt.']
 
             # Keep only available columns and fill missing with NA
             available_final_cols = [col for col in final_columns if col in final_df.columns]
@@ -188,6 +219,19 @@ if pivot_file:
 
             st.write("#### Final Combined Result")
             st.dataframe(result_df)
+
+            # Download option for combined data
+            output_combined = io.BytesIO()
+            with pd.ExcelWriter(output_combined, engine="openpyxl") as writer:
+                download_combined_df = result_df.astype(str)
+                download_combined_df.to_excel(writer, index=False, sheet_name="Combined_Data")
+
+            st.download_button(
+                "Download Combined Data",
+                data=output_combined.getvalue(),
+                file_name="LAXMIPATI_Combined_Data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
             
         else:
             st.warning("Please upload and process the main Excel file first")
