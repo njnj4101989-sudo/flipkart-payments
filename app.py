@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import io
 import difflib
+import warnings
+warnings.filterwarnings('ignore')
 
 # Page setup
 st.set_page_config(page_title="LAXMIPATI Sarees - Excel Processor", layout="wide")
@@ -91,7 +93,7 @@ if uploaded_file:
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 # Convert all columns to string to avoid PyArrow issues
                 download_df = processed_df.astype(str)
-                processed_df.to_excel(writer, index=False, sheet_name="Processed_Data")
+                download_df.to_excel(writer, index=False, sheet_name="Processed_Data")
             
             st.download_button(
                 "Download Processed Excel",
@@ -111,19 +113,34 @@ pivot_file = st.file_uploader("Upload Excel File for Pivot Table", type=["xlsx"]
 if pivot_file:
     try:
         # Read specific sheets: ZTRANS and CN with dtype=str to avoid type issues
-        excel_sheets = pd.read_excel(pivot_file, sheet_name=["ZTRANS", "CN"], dtype=str)
-        ztrans_df = excel_sheets["ZTRANS"]
-        cn_df = excel_sheets["CN"]
+        # Read sheets with different header rows
+        ztra_df = pd.read_excel(pivot_file, sheet_name="ZTRA", dtype=str, header=1)  # Row 1 for ZTRA
+        zcn_df = pd.read_excel(pivot_file, sheet_name="ZCN", dtype=str, header=0)   # Row 0 for ZCN
+
+        ztrans_df = ztra_df  # Keep the same variable name
+        cn_df = zcn_df       # Keep the same variable name
         
-        # Clean column names - remove extra spaces
-        ztrans_df.columns = ztrans_df.columns.str.strip()
-        cn_df.columns = cn_df.columns.str.strip()
+        # Clean data thoroughly
+        ztrans_df = ztrans_df.dropna(how='all')  # Remove completely empty rows
+        cn_df = cn_df.dropna(how='all')
+
+        # Clean column names - remove extra spaces and handle NaN columns
+        ztrans_df.columns = [str(col).strip() if str(col) != 'nan' else f'Unnamed_{i}' 
+                            for i, col in enumerate(ztrans_df.columns)]
+        cn_df.columns = [str(col).strip() if str(col) != 'nan' else f'Unnamed_{i}' 
+                        for i, col in enumerate(cn_df.columns)]
+
+        # Remove rows with all NaN/empty values
+        ztrans_df = ztrans_df.replace('nan', '').replace('', None).dropna(how='all')
+        cn_df = cn_df.replace('nan', '').replace('', None).dropna(how='all')
         
-        st.write("#### ZTRANS Data Preview")
-        st.dataframe(ztrans_df.head())
+        st.write("#### ZTRA Data Preview")
+        st.write("**Available columns:**", list(ztrans_df.columns))
+        st.dataframe(ztrans_df.head().fillna(''))
         
-        st.write("#### CN Data Preview") 
-        st.dataframe(cn_df.head())
+        st.write("#### ZCN Data Preview") 
+        st.write("**Available columns:**", list(cn_df.columns))
+        st.dataframe(cn_df.head().fillna(''))
         
         # Check if main pivot exists from first upload
         if 'main_pivot' in st.session_state:
@@ -138,9 +155,9 @@ if pivot_file:
                 'Total Amt': 'sum'      # Sum all amounts for each customer reference
             }).reset_index()
 
-            # Merge main pivot with ZTRANS data on Order ID = CUSTOMER REFERENCE
+            # Merge main pivot with ZTRANS data on Invoice = CUSTOMER REFERENCE
             combined_df = main_pivot.merge(ztrans_grouped, 
-                                        left_on='Order ID', 
+                                        left_on='Invoice', 
                                         right_on='CUSTOMER REFERENCE', 
                                         how='left')
 
