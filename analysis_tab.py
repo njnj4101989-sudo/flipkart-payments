@@ -140,7 +140,12 @@ def analysis_tab():
         st.markdown("### 📊 Sales vs Bank Settlement Analysis")
         
         # Create 2x2 subplot layout
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+        fig = plt.figure(figsize=(15, 12))
+        gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1]) 
+        ax3 = fig.add_subplot(gs[1, 0])
+        ax4 = fig.add_subplot(gs[1, 1])
         fig.suptitle('LAXMIPATI Sarees - Sales & Payment Analysis', fontsize=16, fontweight='bold')
         
         # Chart 1: Sales vs Settlement Overview
@@ -159,41 +164,104 @@ def analysis_tab():
             ax1.text(bar.get_x() + bar.get_width()/2., height,
                     f'₹{value:,.0f}', ha='center', va='bottom', fontweight='bold')
         
-        # Chart 2: Deduction Breakdown Pie
+        # Chart 2: Deduction Breakdown Bar Chart
         if deduction_data and any(deduction_data.values()):
-            filtered_deductions = {k: v for k, v in deduction_data.items() if v > 0}
-            if filtered_deductions:
-                wedges, texts, autotexts = ax2.pie(filtered_deductions.values(), 
-                                                  labels=filtered_deductions.keys(), 
-                                                  autopct='%1.1f%%',
-                                                  startangle=90)
-                ax2.set_title('Deduction Breakdown', fontweight='bold')
+            # Get all deductions with values > 0
+            deduction_items = [(k, v) for k, v in deduction_data.items() if v > 0]
+            
+            if deduction_items:
+                deduction_names = [item[0] for item in deduction_items]
+                deduction_values = [item[1] for item in deduction_items]
                 
-                # Make percentage text bold
-                for autotext in autotexts:
-                    autotext.set_color('white')
-                    autotext.set_fontweight('bold')
+                bars = ax2.bar(range(len(deduction_names)), deduction_values, 
+                            color=['#FF6B35', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'][:len(deduction_names)])
+                
+                # Fix x-axis
+                ax2.set_xticks(range(len(deduction_names)))
+                ax2.set_xticklabels([name.replace(' ', '\n') for name in deduction_names], 
+                                fontsize=8, rotation=0)
+                ax2.set_xlim(-0.5, len(deduction_names) - 0.5)
+                
+                # Format y-axis for currency
+                ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'₹{x/1000:.0f}K' if x >= 1000 else f'₹{x:.0f}'))
+                
+                # Labels and title
+                ax2.set_title('Deduction Breakdown', fontweight='bold')
+                ax2.set_ylabel('Amount (₹)')
+                
+                # Add value labels on bars
+                for bar, value in zip(bars, deduction_values):
+                    height = bar.get_height()
+                    ax2.text(bar.get_x() + bar.get_width()/2., height,
+                            f'₹{value:,.0f}', ha='center', va='bottom', 
+                            fontweight='bold', fontsize=8)
             else:
                 ax2.text(0.5, 0.5, 'No deductions data', ha='center', va='center', transform=ax2.transAxes)
                 ax2.set_title('Deduction Breakdown', fontweight='bold')
         else:
             ax2.text(0.5, 0.5, 'No deductions data', ha='center', va='center', transform=ax2.transAxes)
             ax2.set_title('Deduction Breakdown', fontweight='bold')
-        
-        # Chart 3: Order-wise scatter (sample of 100 orders)
-        sample_df = df.sample(min(100, len(df)))
-        scatter = ax3.scatter(sample_df['Sale Amount_clean'], 
-                             sample_df['Bank Settlement Value_clean'],
-                             alpha=0.6, s=30, c='#FF6B6B')
-        
-        # Add diagonal line
-        max_val = max(sample_df['Sale Amount_clean'].max(), sample_df['Bank Settlement Value_clean'].max())
-        if max_val > 0:
-            ax3.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, label='1:1 Line')
-        ax3.set_xlabel('Sale Amount (₹)')
-        ax3.set_ylabel('Settlement Amount (₹)')
-        ax3.set_title('Order-wise Analysis (Sample)', fontweight='bold')
-        ax3.legend()
+
+        # Chart 3: Profit Margin Analysis - Pie Chart with Better Labels
+        if 'Sale Amount_clean' in df.columns and 'Bank Settlement Value_clean' in df.columns:
+            # Calculate profit margins for each order
+            sample_df = df.sample(min(100, len(df)))
+            sample_df_analysis = sample_df.copy()
+            sample_df_analysis['Profit_Margin'] = ((sample_df_analysis['Bank Settlement Value_clean'] / 
+                                                sample_df_analysis['Sale Amount_clean']) * 100).fillna(0)
+            
+            # Create profit margin bins with descriptive labels
+            bins = [0, 50, 60, 70, 80, 90, 100]
+            labels = ['Poor (0-50%)', 'Low (50-60%)', 'Fair (60-70%)', 'Good (70-80%)', 'Very Good (80-90%)', 'Excellent (90-100%)']
+            
+            sample_df_analysis['Margin_Category'] = pd.cut(sample_df_analysis['Profit_Margin'], 
+                                                        bins=bins, labels=labels, include_lowest=True)
+            
+            margin_counts = sample_df_analysis['Margin_Category'].value_counts().sort_index()
+            
+            # Filter out zero values for cleaner pie chart
+            margin_counts = margin_counts[margin_counts > 0]
+            
+            if len(margin_counts) > 0:
+                colors = ['#DC3545', '#FF6B35', '#FFC107', '#28A745', '#17A2B8', '#6F42C1'][:len(margin_counts)]
+                
+                # Create custom labels with both category and percentage
+                def make_autopct(values):
+                    def my_autopct(pct):
+                        total = sum(values)
+                        val = int(round(pct*total/100.0))
+                        return f'{pct:.1f}%\n({val} orders)'
+                    return my_autopct
+                
+                wedges, texts, autotexts = ax3.pie(margin_counts.values, 
+                                                labels=margin_counts.index,
+                                                autopct=make_autopct(margin_counts.values),
+                                                startangle=90,
+                                                colors=colors,
+                                                explode=[0.05] * len(margin_counts),
+                                                shadow=True)
+                
+                ax3.set_title('Settlement Efficiency Analysis\n(How much of sale amount is actually received)', 
+                            fontweight='bold', fontsize=12)
+                
+                # Style the text
+                for autotext in autotexts:
+                    autotext.set_color('white')
+                    autotext.set_fontweight('bold')
+                    autotext.set_fontsize(8)
+                
+                for text in texts:
+                    text.set_fontsize(9)
+                    text.set_fontweight('bold')
+                
+            else:
+                ax3.text(0.5, 0.5, 'No data for analysis', ha='center', va='center', 
+                        transform=ax3.transAxes, fontweight='bold')
+                ax3.set_title('Settlement Efficiency Analysis', fontweight='bold')
+        else:
+            ax3.text(0.5, 0.5, 'Required data not available', ha='center', va='center', 
+                    transform=ax3.transAxes, fontweight='bold')
+            ax3.set_title('Settlement Efficiency Analysis', fontweight='bold')
         
         # Chart 4: Monthly trend (prefer Order Date, fallback to Payment Date)
         primary_date_col = None
